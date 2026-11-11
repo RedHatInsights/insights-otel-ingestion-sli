@@ -160,6 +160,12 @@ intervals, rejected evidence, state size and snapshot freshness.
 GitHub Actions runs pre-commit checks and race-enabled Go unit tests on pull
 requests and pushes to `main`, using Go 1.26 to match the image build toolchain.
 
+Konflux builds the UBI image through the PR and push pipelines in `.tekton/`.
+PR builds target `main`, produce temporary images and disable automatic release.
+Push builds run after changes merge into `main`. These checks require the
+repository's Component and Pipelines as Code integration to be provisioned
+in Konflux.
+
 Install [pre-commit](https://pre-commit.com/#install), then enable the local hooks
 and check the repository:
 
