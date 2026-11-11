@@ -1,0 +1,72 @@
+rule_files: [rules.yaml]
+evaluation_interval: 5s
+tests:
+  - name: below target must persist for five minutes
+    interval: 5s
+    input_series:
+      - series: ingestion_sli_window_completed{environment="test",application="hbi",milestone="processing"}
+        values: 100x72
+      - series: ingestion_sli_window_within_target{environment="test",application="hbi",milestone="processing"}
+        values: 98x72
+      - series: ingestion_sli_snapshot_timestamp_seconds{environment="test"}
+        values: 0+5x72
+    alert_rule_test:
+      - eval_time: 4m55s
+        alertname: IngestionLatencyBelowTarget
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: IngestionLatencyBelowTarget
+        exp_alerts:
+          - exp_labels: {environment: test, application: hbi, milestone: processing, severity: warning}
+            exp_annotations:
+              summary: Ingestion latency target missed for hbi/processing
+              description: Fewer than 99% of observed completed paths finished within 60 seconds in the trailing hour, for five consecutive minutes.
+    promql_expr_test:
+      - expr: ingestion_sli:success_ratio_1h
+        eval_time: 5m
+        exp_samples:
+          - labels: ingestion_sli:success_ratio_1h{environment="test",application="hbi",milestone="processing"}
+            value: 0.98
+  - name: exactly 99 percent meets the target
+    interval: 5s
+    input_series:
+      - series: ingestion_sli_window_completed{environment="test",application="hbi",milestone="processing"}
+        values: 100x72
+      - series: ingestion_sli_window_within_target{environment="test",application="hbi",milestone="processing"}
+        values: 99x72
+      - series: ingestion_sli_snapshot_timestamp_seconds{environment="test"}
+        values: 0+5x72
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IngestionLatencyBelowTarget
+        exp_alerts: []
+  - name: empty population remains unknown
+    interval: 5s
+    input_series:
+      - series: ingestion_sli_window_completed{environment="test",application="hbi",milestone="processing"}
+        values: 0x72
+      - series: ingestion_sli_window_within_target{environment="test",application="hbi",milestone="processing"}
+        values: 0x72
+      - series: ingestion_sli_snapshot_timestamp_seconds{environment="test"}
+        values: 0+5x72
+    promql_expr_test:
+      - expr: ingestion_sli:success_ratio_1h
+        eval_time: 5m
+        exp_samples: []
+  - name: stale results must not become an SLA percentage
+    interval: 5s
+    input_series:
+      - series: ingestion_sli_window_completed{environment="test",application="hbi",milestone="processing"}
+        values: 100x72
+      - series: ingestion_sli_window_within_target{environment="test",application="hbi",milestone="processing"}
+        values: 98x72
+      - series: ingestion_sli_snapshot_timestamp_seconds{environment="test"}
+        values: 0x72
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: IngestionLatencyBelowTarget
+        exp_alerts: []
+    promql_expr_test:
+      - expr: ingestion_sli:success_ratio_1h
+        eval_time: 5m
+        exp_samples: []

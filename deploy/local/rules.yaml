@@ -1,0 +1,27 @@
+groups:
+  - name: ingestion-sli
+    interval: 5s
+    rules:
+      - record: ingestion_sli:completed_1h
+        expr: max by (environment, application, milestone) (ingestion_sli_window_completed)
+      - record: ingestion_sli:within_60s_1h
+        expr: max by (environment, application, milestone) (ingestion_sli_window_within_target)
+      - record: ingestion_sli:success_ratio_1h
+        expr: >-
+          ((ingestion_sli:within_60s_1h / ingestion_sli:completed_1h)
+          and (ingestion_sli:completed_1h > 0))
+          and on (environment)
+          ((time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds)) < 20)
+      - alert: IngestionLatencyBelowTarget
+        expr: ingestion_sli:success_ratio_1h < 0.99
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Ingestion latency target missed for {{ $labels.application }}/{{ $labels.milestone }}'
+          description: 'Fewer than 99% of observed completed paths finished within 60 seconds in the trailing hour, for five consecutive minutes.'
+      - alert: IngestionSliSnapshotUnavailable
+        expr: (time() - ingestion_sli_snapshot_timestamp_seconds > 20) or absent(ingestion_sli_snapshot_timestamp_seconds)
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: Ingestion SLI measurements are unavailable or stale

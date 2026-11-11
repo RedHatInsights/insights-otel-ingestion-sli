@@ -1,0 +1,46 @@
+name: ingestion-connector-local
+services:
+  collector:
+    image: localhost/insights-otel-ingestion-sli:local
+    build: {context: ., dockerfile: Containerfile}
+    ports:
+      - '127.0.0.1:14347:4317'
+      - '127.0.0.1:14348:4318'
+      - '127.0.0.1:19464:8889'
+      - '127.0.0.1:19333:13133'
+    volumes:
+      - collector-state:/var/lib/otelcol
+      - ./configs/collector.yaml:/etc/otelcol/config.yaml:ro,z
+    mem_limit: 512m
+    stop_grace_period: 30s
+  prometheus:
+    image: docker.io/prom/prometheus:v3.5.0
+    command: ['--config.file=/etc/prometheus/prometheus.yaml', '--storage.tsdb.retention.time=7d']
+    ports: ['127.0.0.1:19096:9090']
+    volumes:
+      - ./deploy/local/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro,z
+      - ./deploy/local/rules.yaml:/etc/prometheus/rules.yaml:ro,z
+      - prometheus:/prometheus
+  tempo:
+    image: docker.io/grafana/tempo:2.7.1
+    command: ['-config.file=/etc/tempo.yaml']
+    ports: ['127.0.0.1:13270:3200']
+    volumes:
+      - ./deploy/local/tempo.yaml:/etc/tempo.yaml:ro,z
+      - tempo:/var/tempo
+  grafana:
+    image: docker.io/grafana/grafana:11.5.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: 'true'
+    ports: ['127.0.0.1:13013:3000']
+    volumes:
+      - ./deploy/local/grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./deploy/local/grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+      - grafana:/var/lib/grafana
+volumes:
+  collector-state:
+  prometheus:
+  tempo:
+  grafana:

@@ -1,0 +1,21 @@
+/bin/
+/data/
+/dist/
+/coverage.out
+*.db
+*.db.*
+__pycache__/
+
+# Local credentials and private trace captures
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+/captures/
+/replays/
+/reports/

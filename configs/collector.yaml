@@ -1,0 +1,50 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+receivers:
+  otlp:
+    protocols:
+      grpc: {endpoint: '0.0.0.0:4317'}
+      http: {endpoint: '0.0.0.0:4318'}
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+connectors:
+  ingestion_sli:
+    environment: local
+    storage_path: /var/lib/otelcol/ingestion.db
+    window: 1h
+    target: 60s
+    state_retention: 24h
+    snapshot_interval: 5s
+    single_host_per_ingestion: true
+    start:
+      service: ^ingress$
+      name: ^POST /api/ingress/v1/upload$
+      kind: SERVER
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    send_timestamps: false
+    metric_expiration: 20s
+    enable_open_metrics: true
+  otlp_http/tempo:
+    endpoint: http://tempo:4318
+    sending_queue: {enabled: true, queue_size: 1000}
+    retry_on_failure: {enabled: true, max_elapsed_time: 0s}
+service:
+  extensions: [health_check]
+  pipelines:
+    traces/sli:
+      receivers: [otlp]
+      processors: [memory_limiter]
+      exporters: [ingestion_sli]
+    traces/tempo:
+      receivers: [otlp]
+      processors: [memory_limiter]
+      exporters: [otlp_http/tempo]
+    metrics/sli:
+      receivers: [ingestion_sli]
+      exporters: [prometheus]
