@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 go build -mod=readonly -trimpath -ldflags='-s -w' -o /tmp/coll
 
 FROM ${RUNTIME_IMAGE}
 USER 0
-RUN microdnf install -y ca-certificates && microdnf clean all \
+RUN microdnf update -y && microdnf install -y ca-certificates && microdnf clean all \
     && mkdir -p /var/lib/otelcol /etc/otelcol \
     && chgrp -R 0 /var/lib/otelcol /etc/otelcol \
     && chmod -R g=u /var/lib/otelcol /etc/otelcol

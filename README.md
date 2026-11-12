@@ -35,7 +35,7 @@ Tempo exports. Configure the environment and a persistent state volume.
 
 ## Run locally
 
-Requires Go 1.25 or later, Python 3, Podman and podman-compose. Run commands from
+Requires Go 1.26 or later, Python 3, Podman and podman-compose. Run commands from
 the repository root:
 
 ```bash
