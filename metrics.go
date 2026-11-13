@@ -53,14 +53,20 @@ func buildMetrics(s store.Snapshot, environment string) pmetric.Metrics {
 			p.SetIntValue(int64(n))
 		}
 	}
-	quality := newGauge("ingestion_sli_correlation_quality", "Counts of retained unusable completion records, or oldest pending age in seconds.")
+	quality := newGauge("ingestion_sli_correlation_quality", "Counts of retained completion records without usable correlation, or oldest pending age in seconds; missing starts may belong to flows that bypass Ingress.")
 	for reason, value := range map[string]float64{"missing_start": float64(s.PendingStarts), "conflicting_start": float64(s.ConflictingStarts), "conflicting_host": float64(s.ConflictingHosts), "invalid_interval": float64(s.InvalidIntervals), "pending_age_seconds": s.PendingAge} {
 		p := point(quality)
 		p.Attributes().PutStr("reason", reason)
 		p.SetDoubleValue(value)
 	}
+	ignored := point(newGauge("ingestion_sli_ignored_evidence", "Persisted cumulative counts of well-formed completion markers outside the supported application/milestone scope; gauge."))
+	ignored.Attributes().PutStr("reason", "unsupported_pair")
+	ignored.SetIntValue(int64(s.Diagnostics["unsupported_pair"]))
 	rejected := newGauge("ingestion_sli_rejected_evidence", "Persisted cumulative counts of rejected evidence, exposed as gauges.")
 	for reason, n := range s.Diagnostics {
+		if reason == "unsupported_pair" {
+			continue
+		}
 		p := point(rejected)
 		p.Attributes().PutStr("reason", reason)
 		p.SetIntValue(int64(n))

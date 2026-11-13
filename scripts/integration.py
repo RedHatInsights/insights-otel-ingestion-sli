@@ -66,6 +66,8 @@ class Suite:
                 values.setdefault(pair, [0, 0])[int(name.endswith("within_target"))] = int(value)
             elif name == "ingestion_sli_correlation_quality":
                 quality[labels["reason"]] = value
+            elif name in ("ingestion_sli_rejected_evidence", "ingestion_sli_ignored_evidence"):
+                quality[name + "/" + labels["reason"]] = value
         if len(values) != 10 or snapshot <= 0:
             raise ValueError("Incomplete SLA metric snapshot")
         return snapshot, values, quality
@@ -137,6 +139,17 @@ class Suite:
         previous, _, _ = self.read()
         self.send([root] + completions)
         self.verify("duplicate spans and completion events count once", previous)
+
+        previous, _, quality = self.read()
+        self.send([
+            self.completion("outside-scope", ("compliance", "inventory_views")),
+            self.completion("malformed", ("hbi", "processing"), outcome="failed"),
+        ])
+        self.verify("unsupported and malformed markers stay outside SLA counts", previous)
+        diagnostics = self.read()[2]
+        for key in ("ingestion_sli_ignored_evidence/unsupported_pair", "ingestion_sli_rejected_evidence/invalid_marker"):
+            assert diagnostics.get(key, 0) == quality.get(key, 0) + 1, (key, diagnostics)
+        assert diagnostics["missing_start"] == quality["missing_start"]
 
         previous, _, _ = self.read()
         for i, duration in enumerate((60 * SECOND, 60 * SECOND + 1)):
