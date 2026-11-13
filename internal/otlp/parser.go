@@ -124,12 +124,18 @@ func (p Parser) Parse(traces ptrace.Traces, now time.Time) (model.Batch, error) 
 						b.Diagnostics["missing_identity"]++
 						continue
 					}
-					if !model.ValidPair(application, milestone) || (outcome != "processed" && outcome != "unchanged") || !validTime(finished) {
+					if !model.ValidIdentifier(application, 128) || !model.ValidIdentifier(milestone, 128) || (outcome != "processed" && outcome != "unchanged") || !validTime(finished) {
 						b.Diagnostics["invalid_marker"]++
 						continue
 					}
 					if host := hostID(combined); !consistentHost(combined) || (host != "" && !model.ValidIdentifier(host, 128)) {
 						b.Diagnostics["invalid_marker"]++
+						continue
+					}
+					if !model.ValidPair(application, milestone) {
+						// HBI also reports completions for applications outside this SLI.
+						// Keep scope exclusions separate from malformed evidence.
+						b.Diagnostics["unsupported_pair"]++
 						continue
 					}
 					b.Completions = append(b.Completions, model.Completion{Identity: id, Pair: model.Pair{Application: application, Milestone: milestone}, HostID: hostID(combined), Outcome: outcome, CompletedAtNS: int64(finished), TraceID: traceID, SpanID: spanID, Evidence: "marker"})

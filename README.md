@@ -155,6 +155,25 @@ histogram_quantile(0.99,
 Quality metrics expose unmatched completions, conflicting identities, invalid
 intervals, rejected evidence, state size and snapshot freshness.
 
+`ingestion_sli_ignored_evidence{reason="unsupported_pair"}` separately counts
+well-formed completion markers for unsupported application/milestone pairs, such
+as HBI's `compliance / inventory_views` events. They do not enter correlation
+state or SLA counts. Missing fields, invalid timestamps, conflicting identities
+and other malformed evidence still appear in `ingestion_sli_rejected_evidence`.
+Both metrics are persisted cumulative delivery counts exposed as gauges; retries
+can increase them. They are not counts of unique hosts or failed ingestions.
+Existing rejected counts survive upgrades and are not retroactively reclassified.
+
+`ingestion_sli_correlation_quality{reason="missing_start"}` counts retained
+completion records without a matching selected Ingress start. It includes delayed
+or missing start telemetry and workflows that bypass Ingress, such as direct RHSM
+host updates. One ingestion can contribute multiple application/milestone records.
+These records remain unknown and outside latency counts; a late matching start
+can still correlate them within state retention. The marker contract does not
+reliably identify the source reporter, so the connector cannot distinguish these
+causes automatically. This diagnostic alone does not establish an ingestion
+failure or SLA breach. Measuring RHSM paths requires an agreed start boundary.
+
 ## Development and testing
 
 GitHub Actions runs pre-commit checks and race-enabled Go unit tests on pull

@@ -82,7 +82,7 @@ func TestMarkersAllApplicationsAndNoWork(t *testing.T) {
 		}
 	}
 }
-func TestUntrustworthyEvidenceIsExcluded(t *testing.T) {
+func TestExcludedEvidenceIsClassified(t *testing.T) {
 	p := testParser(t)
 	now := time.Now()
 	for _, test := range []struct {
@@ -94,6 +94,20 @@ func TestUntrustworthyEvidenceIsExcluded(t *testing.T) {
 		{"different event host", func(s ptrace.Span) { s.Events().At(0).Attributes().PutStr("rh.host_id", "wrong") }, "conflicting_identity"},
 		{"different host aliases", func(s ptrace.Span) { s.Attributes().PutStr("inventory.host_id", "wrong") }, "invalid_marker"},
 		{"missing identity", func(s ptrace.Span) { s.Attributes().Remove("rh.org_id") }, "missing_identity"},
+		{"unsupported application", func(s ptrace.Span) {
+			s.Events().At(0).Attributes().PutStr("rh.ingestion.application", "compliance")
+			s.Events().At(0).Attributes().PutStr("rh.ingestion.milestone", "inventory_views")
+		}, "unsupported_pair"},
+		{"unsupported milestone", func(s ptrace.Span) {
+			s.Events().At(0).Attributes().PutStr("rh.ingestion.milestone", "future_milestone")
+		}, "unsupported_pair"},
+		{"missing application", func(s ptrace.Span) { s.Events().At(0).Attributes().Remove("rh.ingestion.application") }, "invalid_marker"},
+		{"missing milestone", func(s ptrace.Span) { s.Events().At(0).Attributes().Remove("rh.ingestion.milestone") }, "invalid_marker"},
+		{"malformed application", func(s ptrace.Span) { s.Events().At(0).Attributes().PutStr("rh.ingestion.application", "compliance\n") }, "invalid_marker"},
+		{"unsupported application with invalid outcome", func(s ptrace.Span) {
+			s.Events().At(0).Attributes().PutStr("rh.ingestion.application", "compliance")
+			s.Events().At(0).Attributes().PutStr("rh.ingestion.outcome", "failed")
+		}, "invalid_marker"},
 		{"failure marker", func(s ptrace.Span) { s.Events().At(0).Attributes().PutStr("rh.ingestion.outcome", "failed") }, "invalid_marker"},
 		{"lossy ns", func(s ptrace.Span) {
 			s.Events().At(0).Attributes().PutDouble("rh.ingestion.completed_at_ns", float64(now.UnixNano()))
@@ -107,8 +121,8 @@ func TestUntrustworthyEvidenceIsExcluded(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(b.Completions) != 9 || b.Diagnostics[test.reason] != 1 {
-				t.Fatalf("accepted invalid evidence: %+v", b.Diagnostics)
+			if len(b.Completions) != 9 || len(b.Diagnostics) != 1 || b.Diagnostics[test.reason] != 1 {
+				t.Fatalf("unexpected evidence classification: %+v", b.Diagnostics)
 			}
 		})
 	}

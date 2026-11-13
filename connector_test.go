@@ -59,6 +59,12 @@ func TestCollectorLifecycleMetricsAndRecovery(t *testing.T) {
 		t.Fatal("initial snapshot not published")
 	}
 	traces, _ := otlp.Fixture("happy", now)
+	// Generic HBI completion reporting also includes applications outside the SLI.
+	events := traces.ResourceSpans().At(1).ScopeSpans().At(0).Spans().At(0).Events()
+	ignored := events.AppendEmpty()
+	events.At(0).CopyTo(ignored)
+	ignored.Attributes().PutStr("rh.ingestion.application", "compliance")
+	ignored.Attributes().PutStr("rh.ingestion.milestone", "inventory_views")
 	before, _ := (&ptrace.ProtoMarshaler{}).MarshalTraces(traces)
 	for range 2 {
 		if err := c.ConsumeTraces(ctx, traces); err != nil {
@@ -73,7 +79,7 @@ func TestCollectorLifecycleMetricsAndRecovery(t *testing.T) {
 	mu.Lock()
 	latest := frames[len(frames)-1]
 	mu.Unlock()
-	verifyMetrics(t, latest, 10)
+	verifyMetrics(t, latest, 10, 2)
 	if err := c.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +103,8 @@ func TestCollectorLifecycleMetricsAndRecovery(t *testing.T) {
 	mu.Lock()
 	latest = frames[len(frames)-1]
 	mu.Unlock()
-	verifyMetrics(t, latest, 10)
+	// Diagnostic counts track deliveries, including replays; observations deduplicate.
+	verifyMetrics(t, latest, 10, 3)
 }
 
 func TestMetricExportFailureDoesNotLoseAcceptedEvidence(t *testing.T) {
@@ -131,10 +138,10 @@ func TestMetricExportFailureDoesNotLoseAcceptedEvidence(t *testing.T) {
 	}
 }
 
-func verifyMetrics(t *testing.T, m pmetric.Metrics, expected int64) {
+func verifyMetrics(t *testing.T, m pmetric.Metrics, expected, expectedIgnored int64) {
 	t.Helper()
-	var total int64
-	var seenBucket, seenSnapshot bool
+	var total, ignored int64
+	var seenBucket, seenSnapshot, seenIgnored bool
 	for i := 0; i < m.ResourceMetrics().Len(); i++ {
 		scopes := m.ResourceMetrics().At(i).ScopeMetrics()
 		for j := 0; j < scopes.Len(); j++ {
@@ -153,6 +160,17 @@ func verifyMetrics(t *testing.T, m pmetric.Metrics, expected int64) {
 					switch metric.Name() {
 					case "ingestion_sli_window_completed":
 						total += p.IntValue()
+					case "ingestion_sli_ignored_evidence":
+						reason, _ := p.Attributes().Get("reason")
+						if reason.Str() != "unsupported_pair" {
+							t.Fatalf("unexpected ignored evidence reason: %s", reason.Str())
+						}
+						ignored += p.IntValue()
+						seenIgnored = true
+					case "ingestion_sli_rejected_evidence":
+						if p.IntValue() != 0 {
+							t.Fatal("well-formed out-of-scope marker counted as rejected evidence")
+						}
 					case "ingestion_sli_window_duration_seconds_bucket":
 						if v, ok := p.Attributes().Get("le"); ok && v.Str() == "60" {
 							seenBucket = true
@@ -164,8 +182,8 @@ func verifyMetrics(t *testing.T, m pmetric.Metrics, expected int64) {
 			}
 		}
 	}
-	if total != expected || !seenBucket || !seenSnapshot {
-		t.Fatalf("invalid SLA metrics: total=%d bucket=%t snapshot=%t", total, seenBucket, seenSnapshot)
+	if total != expected || ignored != expectedIgnored || !seenBucket || !seenSnapshot || !seenIgnored {
+		t.Fatalf("invalid SLA metrics: total=%d ignored=%d bucket=%t snapshot=%t", total, ignored, seenBucket, seenSnapshot)
 	}
 }
 
