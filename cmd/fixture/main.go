@@ -17,7 +17,7 @@ import (
 
 func main() {
 	endpoint := flag.String("endpoint", "http://127.0.0.1:14348/v1/traces", "OTLP HTTP traces URL")
-	scenario := flag.String("scenario", "happy", "happy, slow, unchanged")
+	scenario := flag.String("scenario", "happy", "happy, slow, unchanged, processing-errors, error-recovery, post-completion-errors")
 	flag.Parse()
 	traces, err := otlp.Fixture(*scenario, time.Now())
 	if err != nil {

@@ -13,8 +13,9 @@ import (
 // Fixture emits explicitly synthetic contract evidence, never production claims.
 // unchanged produces seven terminal processing observations and no Views events.
 func Fixture(scenario string, now time.Time) (ptrace.Traces, error) {
-	if scenario != "happy" && scenario != "slow" && scenario != "unchanged" {
-		return ptrace.NewTraces(), fmt.Errorf("scenario must be happy, slow, or unchanged")
+	errorScenario := scenario == "processing-errors" || scenario == "error-recovery" || scenario == "post-completion-errors"
+	if scenario != "happy" && scenario != "slow" && scenario != "unchanged" && !errorScenario {
+		return ptrace.NewTraces(), fmt.Errorf("unknown synthetic scenario: %s", scenario)
 	}
 	traces := ptrace.NewTraces()
 	var tid [16]byte
@@ -43,6 +44,47 @@ func Fixture(scenario string, now time.Time) (ptrace.Traces, error) {
 	root := makeSpan("ingress", "POST /api/ingress/v1/upload", base, base.Add(500*time.Millisecond))
 	root.SetKind(ptrace.SpanKindServer)
 	root.Attributes().PutStr("rh.ingestion.route", "advisor")
+	if errorScenario {
+		for i, boundary := range []struct {
+			application, service, name string
+			kind                       ptrace.SpanKind
+		}{
+			{"puptoo", "insights-puptoo", "puptoo.handle_message", ptrace.SpanKindConsumer},
+			{"hbi", "host-inventory-mq", "mq.process platform.inventory.host-ingress-p1", ptrace.SpanKindConsumer},
+			{"advisor", "insights-advisor-service", "process platform.engine.results", ptrace.SpanKindConsumer},
+			{"patch", "patchman-evaluator-upload", "evaluate upload", ptrace.SpanKindInternal},
+			{"vulnerability", "vulnerability-engine-evaluator", "evaluator _evaluate_system", ptrace.SpanKindInternal},
+		} {
+			end := base.Add(time.Duration(i+5) * time.Second)
+			s := makeSpan(boundary.service, boundary.name, end.Add(-time.Second), end)
+			s.SetParentSpanID(root.SpanID())
+			s.SetKind(boundary.kind)
+			s.Status().SetCode(ptrace.StatusCodeError)
+			// A failed child call must never multiply the processing-error count.
+			child := makeSpan(boundary.service, "HTTP POST", end.Add(-time.Millisecond), end)
+			child.SetKind(ptrace.SpanKindClient)
+			child.Status().SetCode(ptrace.StatusCodeError)
+			if scenario != "processing-errors" {
+				at := end.Add(time.Second)
+				if scenario == "post-completion-errors" {
+					at = end.Add(-time.Millisecond)
+				}
+				e := s.Events().AppendEmpty()
+				e.SetName(CompletionEvent)
+				e.SetTimestamp(pcommon.NewTimestampFromTime(at))
+				e.Attributes().PutStr("rh.ingestion.application", boundary.application)
+				e.Attributes().PutStr("rh.ingestion.milestone", "processing")
+				e.Attributes().PutStr("rh.ingestion.outcome", "processed")
+				// Recovery must be separate from the failed attempt's boundary end.
+				if scenario == "error-recovery" {
+					completion := makeSpan(boundary.service, "synthetic recovery", at, at)
+					e.CopyTo(completion.Events().AppendEmpty())
+					s.Events().RemoveIf(func(ptrace.SpanEvent) bool { return true })
+				}
+			}
+		}
+		return traces, nil
+	}
 	for i, pair := range model.Pairs() {
 		if scenario == "unchanged" && pair.Milestone == "inventory_views" {
 			continue

@@ -68,18 +68,45 @@ type Completion struct {
 	Evidence      string // marker or configured span_rule; marker has precedence.
 }
 
+// ProcessingError is evidence from a reviewed processing boundary, not a final
+// ingestion outcome. Trace/span identity distinguishes retries from redelivery.
+type ProcessingError struct {
+	Identity
+	Pair
+	HostID    string
+	EndedAtNS int64
+	TraceID   string
+	SpanID    string
+}
+
+const (
+	ErrorAttempts = iota
+	AffectedErrorPaths
+	RecoveredErrorPaths
+	ErrorPathsWithoutSuccess
+	PostCompletionErrorAttempts
+	PostCompletionErrorPaths
+	ErrorMetricCount
+)
+
+type ErrorCounts [ErrorMetricCount]int64
+
+var ErrorQualityReasons = [...]string{"missing_start", "conflicting_start", "conflicting_host", "invalid_interval", "conflicting_evidence"}
+
 type Batch struct {
 	Starts      []Start
 	Completions []Completion
+	Errors      []ProcessingError
 	Diagnostics map[string]int
 }
 
 type Window struct {
 	Pair
-	Completed uint64   `json:"completed"`
-	Within    uint64   `json:"within_60s"`
-	Sum       float64  `json:"duration_sum_seconds"`
-	Buckets   []uint64 `json:"buckets"`
+	Completed uint64      `json:"completed"`
+	Within    uint64      `json:"within_60s"`
+	Sum       float64     `json:"duration_sum_seconds"`
+	Buckets   []uint64    `json:"buckets"`
+	Errors    ErrorCounts `json:"processing_errors"`
 }
 
 type Snapshot struct {
@@ -91,4 +118,5 @@ type Snapshot struct {
 	InvalidIntervals  uint64   `json:"invalid_intervals"`
 	DeliveryDelay     float64  `json:"maximum_delivery_delay_seconds"`
 	PendingAge        float64  `json:"oldest_pending_age_seconds"`
+	ErrorQuality      [5]int64 `json:"processing_error_correlation_quality"`
 }

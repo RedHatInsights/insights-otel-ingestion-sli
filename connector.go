@@ -102,7 +102,7 @@ func (c *ingestionConnector) publish(parent context.Context) {
 	defer c.mu.RUnlock()
 	snapshot, err := c.state.Snapshot(ctx, c.now())
 	if err == nil {
-		err = c.next.ConsumeMetrics(ctx, buildMetrics(snapshot, c.cfg.Environment))
+		err = c.next.ConsumeMetrics(ctx, buildMetrics(snapshot, c.cfg))
 	}
 	if err != nil && parent.Err() == nil {
 		c.logger.Error("Unable to publish ingestion SLI snapshot", zap.Error(err))

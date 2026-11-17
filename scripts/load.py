@@ -7,12 +7,13 @@ import statistics
 import time
 from pathlib import Path
 
-from integration import PAIRS, SECOND, Suite
+from integration import ERROR_BOUNDARIES, PAIRS, SECOND, Suite
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--seconds", type=int, default=30)
 parser.add_argument("--rate", type=int, default=100, help="ingestions per second")
 parser.add_argument("--output")
+parser.add_argument("--processing-errors", action="store_true", help="Include a failed attempt followed by recovery for each reviewed boundary")
 args = parser.parse_args()
 assert 1 <= args.seconds <= 300 and 1 <= args.rate <= 1000
 args.endpoint = "http://127.0.0.1:14348/v1/traces"
@@ -26,6 +27,11 @@ for i in range(args.seconds):
     for j in range(args.rate):
         name = f"load-{i}-{j}"
         payload.append(suite.root(name))
+        if args.processing_errors:
+            for application in ERROR_BOUNDARIES:
+                payload.append(suite.processing_error(name, application))
+                pair = (application, "processing")
+                suite.error_expected[pair] = [a + b for a, b in zip(suite.error_expected[pair], (1, 1, 1, 0, 0, 0))]
         for pair in PAIRS:
             payload.append(suite.completion(name, pair, 10 * SECOND))
             suite.add(pair, 10 * SECOND)
@@ -36,6 +42,7 @@ suite.verify("controlled load: exact counts for all ten milestones", previous)
 report = {
     "ingestions": args.seconds * args.rate,
     "completion_events": args.seconds * args.rate * len(PAIRS),
+    "processing_error_spans": args.seconds * args.rate * len(ERROR_BOUNDARIES) if args.processing_errors else 0,
     "elapsed_seconds": elapsed,
     "achieved_ingestions_per_second": args.seconds * args.rate / elapsed,
     "otlp_batch_ack_p50_seconds": statistics.median(durations),
