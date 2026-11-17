@@ -3,6 +3,8 @@
 An OpenTelemetry Collector distribution with an `ingestion_sli` traces-to-metrics
 connector. It correlates Ingress upload starts with application completion events
 to measure end-to-end ingestion latency, including queue delays and retries.
+Reviewed processing errors also provide attempt counts, affected paths and recovery
+metrics separately from the latency population.
 
 Correlation state is stored in an embedded bbolt database on a persistent volume.
 
@@ -95,6 +97,78 @@ A later optional error on the enclosing span does not invalidate an explicit
 successful completion event. Failed or incomplete runs are outside this latency
 population.
 
+## Observed processing errors
+
+The connector also correlates native `ERROR` spans from explicitly reviewed
+processing boundaries. These measurements describe observed processing attempts
+and affected paths, not confirmed terminal ingestion failures. They remain
+separate from the successful-completion latency population and its 99% target.
+
+The default rules recognize Puptoo's `puptoo.handle_message`, HBI's initial
+`mq.process platform.inventory.host-ingress-p1`, Advisor's
+`process platform.engine.results`, Patch's per-host `evaluate upload`, and
+Vulnerability's per-host `evaluator _evaluate_system`. Rules match service, span
+name and kind together. SQL and HTTP child errors are ignored. Engine, Ingress
+rejections, and Inventory Views have no default error boundary; an unsupported
+path must not be interpreted as healthy. The configured rules cover observed
+boundaries, not every application validation, listener, or exclusion path.
+Puptoo and Advisor need the corresponding application fixes deployed to expose
+their previously swallowed processing errors.
+
+An attempt deduplicates by ingestion identity plus trace/span ID; a retry with a
+different span ID is another attempt. An affected path counts once per ingestion,
+application and milestone. Its recovery requires an authoritative successful
+completion of that same application and milestone. An `OK` or `UNSET` span
+alone does not establish recovery; the application must emit its agreed completion
+marker. Evidence may arrive out of order or after a restart. A completion in another application or in Inventory
+Views cannot resolve a processing error. An ERROR span ending at or after an
+already established completion is reported separately and cannot revoke success.
+
+The additional metrics are rolling one-hour **gauges**; use them directly, without
+`rate()` or `increase()`:
+
+| Metric prefix `ingestion_sli_window_` | Meaning |
+| --- | --- |
+| `processing_error_attempts` | Distinct reviewed ERROR spans ending in the last hour before successful completion. |
+| `processing_error_paths` | Unique paths with at least one qualifying processing error in the last hour. |
+| `recovered_error_paths` | Affected paths with a later observed successful completion, including successful no-work processing. |
+| `error_paths_without_success` | Affected paths without observed success; these are not proven permanent failures. |
+| `post_completion_error_attempts` | Error spans ending at or after successful completion, in the last hour. |
+| `post_completion_error_paths` | Unique paths with such post-completion errors in the last hour. |
+
+Path counts use their latest qualifying error's end time to deduplicate within
+`(now - 1h, now]`. Recovered and without-success paths partition
+`processing_error_paths`. Post-completion path counts are a separate diagnostic:
+a path may have both earlier recovered errors and later optional errors.
+Recovery uses retained completion evidence, so a completion older than the current
+latency window still prevents a later error from revoking that success. The
+existing synchronized-clock requirement and bounded future tolerance also apply.
+
+`ingestion_sli_error_boundary_enabled` is 1 where a rule is configured and 0
+otherwise; it does not certify full failure coverage. The local dashboard filters
+error measurements by this indicator and snapshot freshness and displays rule
+coverage separately. `ingestion_sli_processing_error_correlation_quality` exposes
+retained error spans excluded for missing starts, conflicting origins/hosts,
+invalid intervals, or conflicting copies of the same error span. Missing error
+identity and ambiguous boundary matches use rejected-evidence diagnostics.
+Identifiers, exception messages and stack traces never become metric labels;
+exception payloads are not retained in correlation state.
+
+No failure percentage or incomplete-run denominator is inferred. Those require
+agreed eligibility, expected-journey and retry-finality definitions. A missing
+completion may be missing telemetry, and not every upload is expected to reach
+every application.
+
+Error state shares the existing transactional embedded database. Version 1 state
+upgrades atomically to version 2, preserving successful observations. Older
+binaries refuse the upgraded volume; retain a pre-upgrade backup if rollback is
+required. Snapshots use minute rollups and boundary-minute indexes rather than
+scanning retained ingestion history. `max_error_attempts_per_request` defaults to
+256 (maximum 4096); exceeding it rejects the batch for retry, as with
+`max_requests`, rather than silently losing deduplication evidence. Monitor
+receiver refusals and connector logs for capacity problems. State retention also
+prunes error evidence and its indexes.
+
 ## Configuration and state
 
 See [configs/collector.yaml](configs/collector.yaml) for the local configuration
@@ -126,7 +200,7 @@ and `max_requests` for the expected ingestion rate and retention period.
 
 ## Metrics
 
-The connector exports these rolling gauges:
+The latency measurements use these rolling gauges:
 
 - `ingestion_sli_window_completed`
 - `ingestion_sli_window_within_target`
@@ -208,6 +282,9 @@ With the local stack running, generate slow or successful no-work processing:
 ```bash
 go run ./cmd/fixture -scenario slow
 go run ./cmd/fixture -scenario unchanged
+go run ./cmd/fixture -scenario processing-errors
+go run ./cmd/fixture -scenario error-recovery
+go run ./cmd/fixture -scenario post-completion-errors
 ```
 
 Run a synthetic load test and save its report in the ignored `reports/` directory:
@@ -215,6 +292,7 @@ Run a synthetic load test and save its report in the ignored `reports/` director
 ```bash
 mkdir -p reports
 python3 scripts/load.py --seconds 30 --rate 100 --output reports/load.json
+python3 scripts/load.py --seconds 30 --rate 100 --processing-errors --output reports/error-load.json
 ```
 
 ## Replay a trace
