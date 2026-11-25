@@ -1,0 +1,75 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "github>RedHatInsights/konflux-pipelines//renovate/foreman_satellite/renovate.json",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "baseBranchPatterns": [
+    "main"
+  ],
+  "enabledManagers": [
+    "docker-compose",
+    "dockerfile",
+    "github-actions",
+    "gomod",
+    "pre-commit",
+    "tekton"
+  ],
+  "platformAutomerge": false,
+  "gomod": {
+    "postUpdateOptions": [
+      "gomodTidy"
+    ]
+  },
+  "pre-commit": {
+    "enabled": true
+  },
+  "tekton": {
+    "managerFilePatterns": [
+      "/^\\.tekton\\/.*\\.ya?ml$/"
+    ],
+    "schedule": [
+      "at any time"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Automerge minor and patch updates",
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Label Go module updates",
+      "matchManagers": [
+        "gomod"
+      ],
+      "addLabels": [
+        "dependencies"
+      ]
+    },
+    {
+      "description": "Label GitHub Actions dependency updates",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "addLabels": [
+        "GitHub-Actions-Updates"
+      ]
+    },
+    {
+      "description": "Update OpenTelemetry Collector core and contrib modules together",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "go.opentelemetry.io/collector",
+        "go.opentelemetry.io/collector/**",
+        "github.com/open-telemetry/opentelemetry-collector-contrib/**"
+      ],
+      "groupName": "OpenTelemetry Collector"
+    }
+  ]
+}
