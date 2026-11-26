@@ -2,7 +2,7 @@
   "uid": "ingestion-connector",
   "title": "Ingestion SLA - Collector connector",
   "schemaVersion": 40,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "time": {
     "from": "now-1h",
@@ -12,7 +12,7 @@
     "ingestion",
     "sli"
   ],
-  "description": "Completion-time rolling one-hour gauges. The exact 60-second fraction drives alerts; p50/p95/p99 use histogram interpolation. No data is unknown, never 100%.",
+  "description": "Completion-time rolling one-hour gauges. The exact 60-second fraction drives alerts; p50/p95/p99 use histogram interpolation. No data is unknown, never 100%. Processing-error gauges expose reviewed partial coverage, retry attempts, unique affected paths and recovery separately from the latency population.",
   "templating": {
     "list": [
       {
@@ -260,6 +260,388 @@
         {
           "refId": "A",
           "expr": "max by (environment, reason) (ingestion_sli_correlation_quality{environment=\"$environment\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "text",
+      "title": "Observed processing errors \u2014 partial coverage",
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "These measurements count **observed processing errors**, not confirmed final ingestion failures. Retries are attempts; duplicate telemetry counts once. Affected paths split into recovered and without observed success. Errors after an explicit completion do not revoke success.\n\nOnly configured, reviewed boundaries appear below. A configured boundary still has partial coverage; absent errors do not prove complete application success. Engine, Ingress rejection, and Inventory Views error boundaries are currently unconfigured. Missing or stale telemetry is **No data**. Latency attainment above continues to use matched successful completions."
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Processing error attempts (1h)",
+      "description": "Distinct reviewed failed processing attempts, deduplicated by ingestion and trace/span identity. SQL/HTTP child errors and post-completion errors are excluded.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_window_processing_error_attempts{environment=\"$environment\"}) and on (environment, application, milestone) (max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) == 1) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Affected ingestion paths (1h)",
+      "description": "Unique ingestion/application/milestone paths with a qualifying processing error in the last hour, counted once even if retried.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 31,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_window_processing_error_paths{environment=\"$environment\"}) and on (environment, application, milestone) (max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) == 1) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Recovered paths with errors (1h)",
+      "description": "Affected paths with a later authoritative successful completion of the same application and milestone.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_window_recovered_error_paths{environment=\"$environment\"}) and on (environment, application, milestone) (max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) == 1) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Error paths without observed success (1h)",
+      "description": "Affected paths lacking observed success. These are not proven permanent failures; telemetry may be incomplete.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 39,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_window_error_paths_without_success{environment=\"$environment\"}) and on (environment, application, milestone) (max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) == 1) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Post-completion error attempts (1h)",
+      "description": "Observed processing-boundary ERROR spans ending at or after successful completion. They do not revoke that completion.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_window_post_completion_error_attempts{environment=\"$environment\"}) and on (environment, application, milestone) (max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) == 1) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Paths with post-completion errors (1h)",
+      "description": "Unique paths with post-completion errors. These may also have earlier recovered errors; do not add them to affected path counts.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 47,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_window_post_completion_error_paths{environment=\"$environment\"}) and on (environment, application, milestone) (max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) == 1) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Reviewed error boundaries (configured != complete coverage)",
+      "description": "A configured rule supports the reviewed boundary only, not every failure path. Unconfigured application/milestone pairs have no error measurement.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, application, milestone) (ingestion_sli_error_boundary_enabled{environment=\"$environment\"}) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NOT CONFIGURED",
+                  "color": "gray"
+                },
+                "1": {
+                  "text": "CONFIGURED \u2014 PARTIAL",
+                  "color": "yellow"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Errors excluded by correlation problems",
+      "description": "Retained reviewed error attempts missing a start or having conflicting evidence, host/origin conflicts, or invalid intervals. These remain outside correlated failure counts.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ingestion-sli-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 55,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (environment, reason) (ingestion_sli_processing_error_correlation_quality{environment=\"$environment\"}) and on (environment) (time() - max by (environment) (ingestion_sli_snapshot_timestamp_seconds{environment=\"$environment\"}) < 30)",
           "instant": true,
           "format": "table"
         }

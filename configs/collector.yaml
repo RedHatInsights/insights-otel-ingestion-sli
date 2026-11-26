@@ -20,6 +20,14 @@ connectors:
     state_retention: 24h
     snapshot_interval: 5s
     single_host_per_ingestion: true
+    max_error_attempts_per_request: 256
+    # Reviewed native processing boundaries; this is partial failure coverage.
+    error_boundaries:
+      - {application: puptoo, milestone: processing, service: '^insights-puptoo$', name: '^puptoo\.handle_message$', kind: CONSUMER}
+      - {application: hbi, milestone: processing, service: '^host-inventory-mq$', name: '^mq\.process platform\.inventory\.host-ingress-p1$', kind: CONSUMER}
+      - {application: advisor, milestone: processing, service: '^insights-advisor-service$', name: '^process platform\.engine\.results$', kind: CONSUMER}
+      - {application: patch, milestone: processing, service: '^patchman-evaluator-upload$', name: '^evaluate upload$', kind: INTERNAL}
+      - {application: vulnerability, milestone: processing, service: '^vulnerability-engine-evaluator$', name: '^evaluator _evaluate_system$', kind: INTERNAL}
     start:
       service: ^ingress$
       name: ^POST /api/ingress/v1/upload$

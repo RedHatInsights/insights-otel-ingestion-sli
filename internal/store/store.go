@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,13 +22,15 @@ import (
 )
 
 var (
-	metaBucket        = []byte("meta")
-	requestBucket     = []byte("requests")
-	expiryBucket      = []byte("expiry")
-	observationBucket = []byte("observations")
-	rollupBucket      = []byte("rollups")
-	pendingBucket     = []byte("pending")
-	pairs             = model.Pairs()
+	metaBucket             = []byte("meta")
+	requestBucket          = []byte("requests")
+	expiryBucket           = []byte("expiry")
+	observationBucket      = []byte("observations")
+	rollupBucket           = []byte("rollups")
+	pendingBucket          = []byte("pending")
+	errorObservationBucket = []byte("error_observations")
+	errorRollupBucket      = []byte("error_rollups")
+	pairs                  = model.Pairs()
 )
 
 type origin struct {
@@ -45,6 +48,7 @@ type request struct {
 	StartConflict, HostConflict bool
 	Host                        string
 	LastEventNS                 int64
+	Errors                      map[string]processingError `json:",omitempty"`
 }
 type observation struct {
 	Pair                                int
@@ -56,10 +60,11 @@ type rollup struct {
 	Bins  []int64
 }
 type metadata struct {
-	CutoffNS    int64
-	Requests    int64
-	Quality     [4]int64 // missing start, conflicting start, conflicting host, invalid interval
-	Diagnostics map[string]uint64
+	CutoffNS     int64
+	Requests     int64
+	Quality      [4]int64 // missing start, conflicting start, conflicting host, invalid interval
+	ErrorQuality [5]int64
+	Diagnostics  map[string]uint64
 }
 type Snapshot struct {
 	model.Snapshot
@@ -85,24 +90,34 @@ func Open(cfg config.Config) (*Store, error) {
 	}
 	s := &Store{db: db, cfg: cfg}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{metaBucket, requestBucket, expiryBucket, observationBucket, rollupBucket, pendingBucket} {
+		for _, name := range [][]byte{metaBucket, requestBucket, expiryBucket, observationBucket, rollupBucket, pendingBucket, errorObservationBucket, errorRollupBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
 		}
 		// Refuse reuse of a volume for another environment or measurement contract.
-		header, err := json.Marshal(struct {
+		contract := struct {
 			Version        int
 			Environment    string
 			Window, Target int64
 			Start          config.Selector
-		}{1, cfg.Environment, int64(cfg.Window), int64(cfg.Target), cfg.Start})
+		}{2, cfg.Environment, int64(cfg.Window), int64(cfg.Target), cfg.Start}
+		header, err := json.Marshal(contract)
 		if err != nil {
 			return err
 		}
 		b := tx.Bucket(metaBucket)
 		if previous := b.Get([]byte("contract")); previous != nil && !bytes.Equal(header, previous) {
-			return fmt.Errorf("state volume belongs to a different environment or evidence contract")
+			// Version 1 has no error state. Upgrade in the same transaction without
+			// rewriting successful observations; old binaries then refuse the volume.
+			contract.Version = 1
+			legacy, err := json.Marshal(contract)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(legacy, previous) {
+				return fmt.Errorf("state volume belongs to a different environment or evidence contract")
+			}
 		}
 		return b.Put([]byte("contract"), header)
 	})
@@ -234,6 +249,9 @@ func reconcile(tx *bolt.Tx, m *metadata, key []byte, before, after request) erro
 			}
 		}
 	}
+	if err := reconcileErrors(tx, m, key, before, after); err != nil {
+		return err
+	}
 	for i := range m.Quality {
 		m.Quality[i] += nq[i] - oq[i]
 		if m.Quality[i] < 0 {
@@ -272,7 +290,7 @@ func (s *Store) Apply(ctx context.Context, b model.Batch, now time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(b.Starts) == 0 && len(b.Completions) == 0 && len(b.Diagnostics) == 0 {
+	if len(b.Starts) == 0 && len(b.Completions) == 0 && len(b.Errors) == 0 && len(b.Diagnostics) == 0 {
 		return nil
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -288,6 +306,7 @@ func (s *Store) Apply(ctx context.Context, b model.Batch, now time.Time) error {
 			id          model.Identity
 			starts      []model.Start
 			completions []model.Completion
+			errors      []model.ProcessingError
 		}
 		updates := make(map[string]*update)
 		get := func(id model.Identity) *update {
@@ -312,6 +331,13 @@ func (s *Store) Apply(ctx context.Context, b model.Batch, now time.Time) error {
 				continue
 			}
 			get(v.Identity).completions = append(get(v.Identity).completions, v)
+		}
+		for _, v := range b.Errors {
+			if v.EndedAtNS <= m.CutoffNS {
+				m.Diagnostics["expired_evidence"]++
+				continue
+			}
+			get(v.Identity).errors = append(get(v.Identity).errors, v)
 		}
 		for raw, u := range updates {
 			if err := ctx.Err(); err != nil {
@@ -370,6 +396,41 @@ func (s *Store) Apply(ctx context.Context, b model.Batch, now time.Time) error {
 				}
 				after.LastEventNS = max(after.LastEventNS, v.CompletedAtNS)
 			}
+			if len(u.errors) > 0 {
+				after.Errors = maps.Clone(before.Errors)
+				if after.Errors == nil {
+					after.Errors = make(map[string]processingError)
+				}
+			}
+			for _, v := range u.errors {
+				p := pairIndex(v.Pair)
+				if p < 0 || v.TraceID == "" || v.SpanID == "" {
+					return fmt.Errorf("invalid processing error evidence")
+				}
+				token := v.TraceID + "/" + v.SpanID
+				err := processingError{Pair: p, NS: v.EndedAtNS, Host: v.HostID}
+				if previous, ok := after.Errors[token]; ok {
+					if previous.Pair != err.Pair || previous.NS != err.NS || previous.Host != err.Host {
+						previous.Conflict = true
+						after.Errors[token] = previous
+						m.Diagnostics["conflicting_error_evidence"]++
+					}
+					continue
+				}
+				if len(after.Errors) >= s.cfg.MaxErrorAttemptsPerRequest {
+					return fmt.Errorf("max_error_attempts_per_request reached; refusing to discard error evidence")
+				}
+				after.Errors[token] = err
+				if v.HostID != "" {
+					if after.Host != "" && after.Host != v.HostID {
+						after.HostConflict = true
+					}
+					if after.Host == "" {
+						after.Host = v.HostID
+					}
+				}
+				after.LastEventNS = max(after.LastEventNS, v.EndedAtNS)
+			}
 			if reflect.DeepEqual(before, after) {
 				continue
 			}
@@ -397,6 +458,9 @@ func (s *Store) Apply(ctx context.Context, b model.Batch, now time.Time) error {
 // Prune bounds each cleanup transaction. The persisted admission cutoff prevents
 // old replayed evidence from reappearing after eviction or a retention increase.
 func (s *Store) Prune(ctx context.Context, now time.Time, limit int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		m, err := readMeta(tx)
 		if err != nil {
@@ -411,6 +475,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time, limit int) error {
 			}
 			keys = append(keys, bytes.Clone(k[8:]))
 		}
+		work := 0
 		for _, key := range keys {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -419,9 +484,16 @@ func (s *Store) Prune(ctx context.Context, now time.Time, limit int) error {
 			if err := load(tx.Bucket(requestBucket), key, &r); err != nil {
 				return err
 			}
+			// A retry-heavy path must not turn a bounded cleanup batch into
+			// millions of error-index updates. Always allow one path to progress.
+			cost := 1 + len(r.Errors)
+			if work > 0 && work+cost > limit {
+				break
+			}
 			if err := removeRequest(tx, &m, key, r); err != nil {
 				return err
 			}
+			work += cost
 		}
 		return save(tx.Bucket(metaBucket), []byte("state"), m)
 	})
@@ -448,6 +520,7 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 		result.ConflictingStarts = uint64(m.Quality[1])
 		result.ConflictingHosts = uint64(m.Quality[2])
 		result.InvalidIntervals = uint64(m.Quality[3])
+		result.ErrorQuality = m.ErrorQuality
 		if key, _ := tx.Bucket(pendingBucket).Cursor().First(); key != nil {
 			result.PendingAge = max(0, now.Sub(time.Unix(0, int64(binary.BigEndian.Uint64(key[:8])))).Seconds())
 		}
@@ -497,7 +570,7 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 			}
 			w.Within = w.Buckets[bucket(int64(s.cfg.Target))]
 		}
-		return nil
+		return snapshotErrors(ctx, tx, &result, lower, upper)
 	})
 	if info, statErr := os.Stat(s.cfg.StoragePath); statErr == nil {
 		result.FileBytes = info.Size()

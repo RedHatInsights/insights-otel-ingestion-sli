@@ -28,14 +28,11 @@ func (s *Selector) Compile() error {
 	if s.nameRE, err = regexp.Compile(s.Name); err != nil {
 		return err
 	}
-	if s.Kind != "SERVER" {
-		return fmt.Errorf("Ingress start must be a SERVER span")
-	}
 	return nil
 }
 
 func (s Selector) Matches(service, name, kind string, attrs map[string]string) bool {
-	if s.serviceRE == nil || s.nameRE == nil || !s.serviceRE.MatchString(service) || !s.nameRE.MatchString(name) || kind != s.Kind {
+	if kind != s.Kind || s.serviceRE == nil || s.nameRE == nil || !s.serviceRE.MatchString(service) || !s.nameRE.MatchString(name) {
 		return false
 	}
 	for key, value := range s.Attributes {
@@ -46,20 +43,28 @@ func (s Selector) Matches(service, name, kind string, attrs map[string]string) b
 	return true
 }
 
+type ErrorBoundary struct {
+	Selector    `mapstructure:",squash"`
+	Application string `mapstructure:"application"`
+	Milestone   string `mapstructure:"milestone"`
+}
+
 type Config struct {
-	Environment          string        `mapstructure:"environment"`
-	StoragePath          string        `mapstructure:"storage_path"`
-	Window               time.Duration `mapstructure:"window"`
-	Target               time.Duration `mapstructure:"target"`
-	StateRetention       time.Duration `mapstructure:"state_retention"`
-	SnapshotInterval     time.Duration `mapstructure:"snapshot_interval"`
-	MaintenanceInterval  time.Duration `mapstructure:"maintenance_interval"`
-	MaintenanceBatchSize int           `mapstructure:"maintenance_batch_size"`
-	MaxRequests          int           `mapstructure:"max_requests"`
-	MaxSpans             int           `mapstructure:"max_spans"`
-	FutureTolerance      time.Duration `mapstructure:"future_tolerance"`
-	SingleHost           bool          `mapstructure:"single_host_per_ingestion"`
-	Start                Selector      `mapstructure:"start"`
+	Environment                string          `mapstructure:"environment"`
+	StoragePath                string          `mapstructure:"storage_path"`
+	Window                     time.Duration   `mapstructure:"window"`
+	Target                     time.Duration   `mapstructure:"target"`
+	StateRetention             time.Duration   `mapstructure:"state_retention"`
+	SnapshotInterval           time.Duration   `mapstructure:"snapshot_interval"`
+	MaintenanceInterval        time.Duration   `mapstructure:"maintenance_interval"`
+	MaintenanceBatchSize       int             `mapstructure:"maintenance_batch_size"`
+	MaxRequests                int             `mapstructure:"max_requests"`
+	MaxSpans                   int             `mapstructure:"max_spans"`
+	FutureTolerance            time.Duration   `mapstructure:"future_tolerance"`
+	SingleHost                 bool            `mapstructure:"single_host_per_ingestion"`
+	Start                      Selector        `mapstructure:"start"`
+	ErrorBoundaries            []ErrorBoundary `mapstructure:"error_boundaries"`
+	MaxErrorAttemptsPerRequest int             `mapstructure:"max_error_attempts_per_request"`
 }
 
 func Default() *Config {
@@ -69,7 +74,15 @@ func Default() *Config {
 		SnapshotInterval: 5 * time.Second, MaintenanceInterval: 30 * time.Second,
 		MaintenanceBatchSize: 10000, MaxRequests: 10000000, MaxSpans: 50000,
 		FutureTolerance: time.Minute, SingleHost: true,
-		Start: Selector{Service: "^ingress$", Name: "^POST /api/ingress/v1/upload$", Kind: "SERVER"},
+		Start:                      Selector{Service: "^ingress$", Name: "^POST /api/ingress/v1/upload$", Kind: "SERVER"},
+		MaxErrorAttemptsPerRequest: 256,
+		ErrorBoundaries: []ErrorBoundary{
+			{Selector: Selector{Service: "^insights-puptoo$", Name: "^puptoo\\.handle_message$", Kind: "CONSUMER"}, Application: "puptoo", Milestone: "processing"},
+			{Selector: Selector{Service: "^host-inventory-mq$", Name: "^mq\\.process platform\\.inventory\\.host-ingress-p1$", Kind: "CONSUMER"}, Application: "hbi", Milestone: "processing"},
+			{Selector: Selector{Service: "^insights-advisor-service$", Name: "^process platform\\.engine\\.results$", Kind: "CONSUMER"}, Application: "advisor", Milestone: "processing"},
+			{Selector: Selector{Service: "^patchman-evaluator-upload$", Name: "^evaluate upload$", Kind: "INTERNAL"}, Application: "patch", Milestone: "processing"},
+			{Selector: Selector{Service: "^vulnerability-engine-evaluator$", Name: "^evaluator _evaluate_system$", Kind: "INTERNAL"}, Application: "vulnerability", Milestone: "processing"},
+		},
 	}
 }
 
@@ -95,5 +108,23 @@ func (c *Config) Validate() error {
 	if c.FutureTolerance < 0 || c.FutureTolerance > 5*time.Minute {
 		return fmt.Errorf("future_tolerance must be between 0 and 5m")
 	}
-	return c.Start.Compile()
+	if c.Start.Kind != "SERVER" {
+		return fmt.Errorf("Ingress start must be a SERVER span")
+	}
+	if err := c.Start.Compile(); err != nil {
+		return err
+	}
+	if c.MaxErrorAttemptsPerRequest < 1 || c.MaxErrorAttemptsPerRequest > 4096 || len(c.ErrorBoundaries) > 64 {
+		return fmt.Errorf("invalid processing error capacity limits")
+	}
+	for i := range c.ErrorBoundaries {
+		rule := &c.ErrorBoundaries[i]
+		if !model.ValidPair(rule.Application, rule.Milestone) || (rule.Kind != "CONSUMER" && rule.Kind != "INTERNAL" && rule.Kind != "SERVER") {
+			return fmt.Errorf("invalid processing error boundary")
+		}
+		if err := rule.Compile(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

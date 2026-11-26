@@ -93,6 +93,32 @@ func (p Parser) Parse(traces ptrace.Traces, now time.Time) (model.Batch, error) 
 						b.Starts = append(b.Starts, model.Start{Identity: id, StartedAtNS: int64(span.StartTimestamp()), TraceID: traceID, SpanID: spanID})
 					}
 				}
+				if span.Status().Code() == ptrace.StatusCodeError {
+					var pair model.Pair
+					matches := 0
+					for _, rule := range p.Config.ErrorBoundaries {
+						if rule.Matches(service, span.Name(), kind, attrs) {
+							pair = model.Pair{Application: rule.Application, Milestone: rule.Milestone}
+							matches++
+						}
+					}
+					if matches > 1 {
+						b.Diagnostics["ambiguous_error_boundary"]++
+					} else if matches == 1 {
+						id := identity(p.Config.Environment, attrs)
+						switch {
+						case id.Validate() != nil:
+							b.Diagnostics["error_missing_identity"]++
+						case !consistentHost(attrs) || (hostID(attrs) != "" && !model.ValidIdentifier(hostID(attrs), 128)):
+							b.Diagnostics["error_invalid_host"]++
+						case (attrs["rh.ingestion.application"] != "" && attrs["rh.ingestion.application"] != pair.Application) ||
+							(attrs["rh.ingestion.milestone"] != "" && attrs["rh.ingestion.milestone"] != pair.Milestone):
+							b.Diagnostics["conflicting_error_boundary"]++
+						default:
+							b.Errors = append(b.Errors, model.ProcessingError{Identity: id, Pair: pair, HostID: hostID(attrs), EndedAtNS: int64(span.EndTimestamp()), TraceID: traceID, SpanID: spanID})
+						}
+					}
+				}
 				for n := 0; n < span.Events().Len(); n++ {
 					event := span.Events().At(n)
 					if event.Name() != CompletionEvent {
