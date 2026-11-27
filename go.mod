@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusexporter v0.158.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.158.0
-	go.etcd.io/bbolt v1.4.3
+	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/collector/component v1.71.0
 	go.opentelemetry.io/collector/confmap v1.64.0
 	go.opentelemetry.io/collector/confmap/provider/envprovider v1.64.0
