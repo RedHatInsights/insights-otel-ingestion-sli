@@ -22,7 +22,7 @@ services:
       - ./deploy/local/rules.yaml:/etc/prometheus/rules.yaml:ro,z
       - prometheus:/prometheus
   tempo:
-    image: docker.io/grafana/tempo:2.7.1
+    image: docker.io/grafana/tempo:2.10.10
     command: ['-config.file=/etc/tempo.yaml']
     ports: ['127.0.0.1:13270:3200']
     volumes:
