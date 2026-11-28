@@ -1,4 +1,4 @@
-ARG GO_IMAGE=registry.access.redhat.com/ubi10/go-toolset:1.27.4-1795507689
+ARG GO_IMAGE=registry.access.redhat.com/ubi10/go-toolset:10.3-1795507689
 ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi10/ubi-minimal:latest
 
 FROM ${GO_IMAGE} AS build
